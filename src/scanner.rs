@@ -4,13 +4,14 @@ use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio::sync::Semaphore;
+use tokio::io::AsyncReadExt;
 
 // Limits concurrent scans to avoid exhausting system file descriptors.
 const MAX_CONCURRENT_SCANS: usize = 1024;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PortState {
-    Open,
+    Open(Option<String>),
     Closed,
     Filtered,
 }
@@ -21,14 +22,47 @@ pub struct ScanResult {
     pub state: PortState,
 }
 
-/// Scans a single TCP port on a resolved IP address.
+/// Scans a single TCP port on a resolved IP address and captures the service
+/// banner when available.
 pub async fn scan_port(ip: IpAddr, port: u16, timeout_ms: u64) -> ScanResult {
     let socket_addr = SocketAddr::new(ip, port);
 
     match timeout(Duration::from_millis(timeout_ms), TcpStream::connect(socket_addr)).await {
-        Ok(Ok(_))  => ScanResult { port, state: PortState::Open },
-        Ok(Err(_)) => ScanResult { port, state: PortState::Closed },
-        Err(_)     => ScanResult { port, state: PortState::Filtered },
+        Ok(Ok(mut stream)) => {
+            // Buffer used to capture the initial service banner.
+            let mut buffer = [0; 128];
+
+            // Wait briefly for the service to send a banner without delaying the scan.
+            match timeout(Duration::from_millis(250), stream.read(&mut buffer)).await {
+                Ok(Ok(bytes_read)) if bytes_read > 0 => {
+                    // Decode the received bytes into a readable banner string.
+                    let banner = String::from_utf8_lossy(&buffer[..bytes_read])
+                        .trim()
+                        .replace("\r\n", " ")
+                        .replace('\n', " ")
+                        .to_string();
+
+                    ScanResult {
+                        port,
+                        state: PortState::Open(Some(banner)),
+                    }
+                }
+
+                // The port is open, but the service did not send a banner.
+                _ => ScanResult {
+                    port,
+                    state: PortState::Open(None),
+                },
+            }
+        }
+        Ok(Err(_)) => ScanResult {
+            port,
+            state: PortState::Closed,
+        },
+        Err(_) => ScanResult {
+            port,
+            state: PortState::Filtered,
+        },
     }
 }
 

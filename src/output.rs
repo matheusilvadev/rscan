@@ -17,30 +17,37 @@ fn service_name(port: u16) -> &'static str {
         6379 => "Redis",
         8080 => "HTTP-Alt",
         8443 => "HTTPS-Alt",
-        _    => "",
+        _    => "unknown",
     }
 }
 
 pub fn print_header(host: &str, total: usize) {
-    println!("{}", "─".repeat(45));
+    println!("{}", "─".repeat(60));
     println!("  Host:   {}", host.bold());
     println!("  Portas: {}", total);
-    println!("{}", "─".repeat(45));
+    println!("{}", "─".repeat(60));
     println!("{:<10} {:<12} {}", "PORTA", "ESTADO", "SERVIÇO");
-    println!("{}", "─".repeat(45));
+    println!("{}", "─".repeat(60));
 }
 
 pub fn print_result(result: &ScanResult, verbose: bool) {
     let port_str = format!("{}/tcp", result.port);
-    let service  = service_name(result.port);
+    let default_service = service_name(result.port);
 
-    match result.state {
-        PortState::Open => {
+    match &result.state {
+        PortState::Open(maybe_banner) => {
+            // Display the captured banner when available; otherwise fall back
+            // to the default service name associated with the port.
+            let service_display = match maybe_banner {
+                Some(banner) => banner.yellow(),
+                None => default_service.cyan(),
+            };
+
             println!(
                 "{:<10} {:<12} {}",
                 port_str,
                 "open".green().bold(),
-                service.cyan()
+                service_display
             );
         }
         PortState::Closed if verbose => {
@@ -57,16 +64,16 @@ pub fn print_result(result: &ScanResult, verbose: bool) {
                 "filtered".yellow()
             );
         }
-        _ => {} // silencioso sem --verbose
+        _ => {}
     }
 }
 
 pub fn print_summary(results: &[ScanResult]) {
     let open = results.iter()
-        .filter(|r| matches!(r.state, PortState::Open))
+        .filter(|r| matches!(r.state, PortState::Open(_)))
         .count();
 
-    println!("{}", "─".repeat(45));
+    println!("{}", "─".repeat(60));
     println!("  {} porta(s) aberta(s) encontrada(s)", open.to_string().green().bold());
-    println!("{}", "─".repeat(45));
+    println!("{}", "─".repeat(60));
 }
